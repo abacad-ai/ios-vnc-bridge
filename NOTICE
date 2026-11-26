@@ -1,0 +1,18 @@
+Third-party software
+
+iOS VNC Bridge itself is MIT licensed (see LICENSE).
+
+At runtime it drives the device through pymobiledevice3
+(https://github.com/doronz88/pymobiledevice3), which is licensed under
+GPL-3.0-or-later. The app does not bundle or redistribute pymobiledevice3: it
+creates a private Python environment on the user's machine and installs the
+package there from PyPI on first run.
+
+If you redistribute a bundle that contains pymobiledevice3, that distribution
+is governed by the GPL-3.0-or-later, not by this project's MIT license, and you
+must provide the corresponding source. Building your own notarized bundle for
+others is such a redistribution — install it at runtime, as this app does, or
+comply with the GPL.
+
+The Go engine's dependencies are listed in go.mod; the app's only Apple
+framework use is AppKit, SwiftUI and ServiceManagement.

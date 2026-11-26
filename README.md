@@ -1,125 +1,122 @@
-# iosvnc
+# iOS VNC Bridge
 
-Expose a paired iPhone or iPad as a **standard RFB (VNC) endpoint** — no
-jailbreak, no app on the phone.
-
-Two processes, split on purpose:
+A macOS menu-bar app that turns a **paired iPhone or iPad into a standard VNC
+(RFB) server**. No app on the device, no jailbreak, no cloud, no terminal.
 
 ```
-browser / abacad ──RFB──▶ iosvnc (Go)                    one viewer per session
-                            │  length-prefixed JPEG  ↑
-                            │  JSON input commands    ↓
-                          bridge/iosbridge.py (Python, pymobiledevice3)
-                            └─ CoreDevice: HEVC stream, HID touch, keep-awake
+ iPhone / iPad ──USB or Wi-Fi──▶  iOS VNC Bridge (this Mac)  ──RFB :5970──▶  abacad
+                                                                          macOS Screen Sharing
+                                                                          TigerVNC / noVNC
 ```
 
-**Why the split.** iOS only delivers HID reports from a process that holds a
-display stream, and the digitizer surface is matched asynchronously *after* that
-stream settles. Splitting the stream and the input across processes produces a
-state that works intermittently — the failure mode that started this project.
-So one process owns the whole device session (Python, where pymobiledevice3
-lives), and everything that is commodity and stable — RFB framing, encodings,
-scaling, auth — stays in Go.
+It is the device-facing companion for [abacad](https://github.com/abacad-ai/abacad),
+but it speaks plain RFB, so any VNC client can connect to it directly.
 
-**Why not reuse an existing VNC server for iOS.** `pymobiledevice3 ... serve-vnc`
-exists, and we tried it: it offers only Raw encoding (12 MB per frame at native
-size), ignores the client's `SetPixelFormat` (red and blue come out swapped),
-opens HID outside the auth context (input is dropped), waits for the first frame
-before sending the RFB banner, and has no keep-awake or reconnect. All five are
-fixed here.
-
-## What it does today
+## What it does
 
 | | |
 |---|---|
 | Frame rate | 25–40 fps while the screen changes |
-| Frame size | ~78 KB (Tight/JPEG, 592×1280 for an iPhone 15 Pro) |
-| Input | tap, drag, swipe (a press shorter than 80 ms is ignored by iOS; the bridge enforces the dwell) |
-| Keep-awake | a `PreventUserIdleSystemSleep` assertion on the device, renewed every 2 min |
-| Streaming lifetime | RTCP receiver reports every second — without them the device reaps the video session after ~25 s |
-| Loss handling | RTP sequence gaps drop the corrupt access unit and request a fresh IDR |
-| Session lifetime | supervised: the bridge is restarted after a dropped tunnel, a crash or a wedged process, and viewers are disconnected the moment it is gone |
-
-**Not done yet: keyboard input.** Tapping and dragging work; typing does not.
-
-**Input is a pointer state, not a tape.** A stalled tunnel does not raise: XPC
-flow control simply stops granting window, so every touch report waits in the
-bridge and the whole backlog is delivered at once when the link returns -- a tap
-made 30 s ago then lands on whatever is on screen now. Three rules prevent it: a
-queued event older than 1.5 s is dropped (releasing a finger that is down), a
-report that waits 6 s on flow control ends the session, and a 5 s HID round trip
-does the same, so a stall costs a restart instead of a replay.
-
-**A dead session is never shown as live.** A frozen frame and a still screen are
-indistinguishable, so the Go side treats the bridge as the source of truth:
-when it ends, `Wait` returns an error, every RFB connection is closed, and new
-ones are refused until a fresh session produces a frame. Two failures are
-covered — the process exits (pipe EOF) and the process wedges (no frames and no
-log line for 15 s, killed by a watchdog). A quiet screen is not a wedge: a still
-screen sends no frames, but the bridge logs a stats line every two seconds, so
-the heartbeat keeps running.
-
-The Python side exits with `os._exit` on any fatal error rather than unwinding:
-its shutdown joins VideoToolbox threads, and a bridge that lingers after a
-dropped tunnel keeps its stdout open — which is exactly how a viewer ends up
-staring at yesterday's screenshot while the status says connected.
-
-## Wi-Fi
-
-The device can be reached over the network instead of the cable:
-
-```bash
-pymobiledevice3 lockdown wifi-connections on   # once, with the cable in
-./serve-ios.sh 0.0.0.0:5970 --password PW --connection wifi
-```
-
-The switch is the standard "connect to this iPhone over network" one; it makes
-usbmuxd list the device twice, once per interface, and `--connection wifi` builds
-the whole session (tunnel, display stream, HID) from the network entry. Measured
-on an iPhone 15 Pro, same Wi-Fi: 34 fps under continuous motion, and a swipe
-takes the same ~105 ms to reach the first framebuffer update as USB does. The
-first touch after a long quiet spell is slower on both connections, because the
-device has to send a fresh keyframe.
-
-USB stays the default: it is the connection that cannot be flaky, and pairing
-still requires a cable.
+| Frame size | ~700 px wide (Tight/JPEG, a few tens of KB per frame) |
+| Input | tap, drag and swipe — a press shorter than 80 ms is ignored by iOS, the bridge enforces the dwell |
+| Keep-awake | a power assertion on the device, renewed every 2 minutes |
+| Recovery | the device session is rebuilt after a dropped tunnel or a wedged process; viewers are disconnected rather than shown a frozen picture |
+| Connection | USB by default; Wi-Fi once the device is set to "connect over network" |
 
 ## Requirements
 
-- macOS with **Xcode 27**, a device **paired**, **Developer Mode** on, **unlocked**
-  and on **USB**.
-- Python 3.9+ with pymobiledevice3:
+- **macOS 26 or later** (Apple Silicon).
+- **Xcode 27**, installed and opened once (the device stream comes from Apple's
+  CoreDevice developer services, the same ones Xcode's device window uses).
+- **iPhone or iPad on iOS/iPadOS 27+**, with **Developer Mode** enabled,
+  **paired and trusted**, and **unlocked** when you start the session.
+- **Python 3.9+** — Xcode's toolchain is enough; Homebrew `python3` also works.
+  The app installs `pymobiledevice3` into its own environment on first run.
 
-  ```bash
-  python3 -m venv .venv && .venv/bin/pip install pymobiledevice3
-  ```
+## Install
 
-- No root: the bridge uses the in-process userspace tunnel and falls back to the
-  native (remoted-piggyback) one only if that fails. The native path is tried
-  second on purpose — when it fails it takes 60 s to time out.
+1. Download the DMG from [Releases](https://github.com/abacad-ai/ios-vnc-bridge/releases)
+   and drag **iOS VNC Bridge** into `/Applications`.
+2. Launch it. Release builds are ad-hoc signed for now, so Gatekeeper asks once:
+   right-click → **Open**.
+3. The app lives in the menu bar (no Dock icon, no window).
 
-## Run
+## First run
 
-```bash
-./serve-ios.sh                          # 0.0.0.0:5970
-./serve-ios.sh 192.168.1.10:5970 --password Abcd1234
+1. **Install device runtime** — one network download (it creates a private
+   Python environment in `~/Library/Application Support/ios-vnc-bridge`).
+2. Pick the **device** and the **connection** (USB / Wi-Fi), then **Start**.
+   The first frame takes 15–30 s: tunnel, video stream, keyframe.
+3. With **Start when a device is found** on (the default), the app serves as
+   soon as a device is visible — opening the app is enough.
+4. When the pill says **Live**, copy the address and the password into abacad:
+   **Host** the Mac's LAN address, **Port** `5970`, **Sign-in → VNC password**,
+   **Platform** iOS/iPadOS, **Mode** Gateway.
+
+The password is generated on first launch, stored in a `0600` file under
+`~/Library/Application Support/ios-vnc-bridge`, and required by the engine —
+there is no unauthenticated mode. It reaches the engine over a pipe, so it does
+not show up in `ps`.
+
+## Limits, honestly
+
+- **No typing.** Tap, drag and swipe work; there is no keyboard path yet.
+- **No pinch or multi-touch.** One contact at a time.
+- **Rotation is not handled yet.** The bridge streams the device's main display
+  in its native orientation and does not follow rotation. An iPad held in
+  landscape when you press Start will most likely come out sideways, and
+  rotating mid-session leaves the viewer stretched until it reconnects. This is
+  the next thing on the list (iPhone landscape has the same gap).
+- **Protected video renders black**, as it does in any screen recording.
+- The device must stay reachable. Pulling the cable ends the session; the app
+  rebuilds it within a few seconds and disconnects viewers in the meantime.
+- Wi-Fi works only after the device has been paired for the network once
+  ("Connect to this iPhone over network", with the cable in).
+
+## How it works
+
+The menu-bar app is a supervisor, not a VNC implementation. It launches two
+helpers and shows their state:
+
+```
+iOS VNC Bridge.app (SwiftUI, menu bar)
+   ├── engine           (Go)     RFB framing, encodings, scaling, auth
+   └── bridge/iosbridge.py (Python, pymobiledevice3)
+          └── CoreDevice: HEVC stream, HID touch, keep-awake
 ```
 
-Then add it to abacad as a device: **Host** the Mac's address, **Port** 5970,
-**Sign-in → VNC password**, **Platform → iOS**.
+The split is deliberate. iOS only delivers HID reports from a process that
+holds a display stream, and the digitizer surface is matched asynchronously
+*after* that stream settles — splitting stream and input across processes
+produces input that works intermittently. So one process owns the whole device
+session (Python, where pymobiledevice3 lives), and everything commodity and
+stable stays in Go.
 
-## Diagnostics
+The engine's log is the app's status channel: `listening on`, `viewer …
+connected`, `device session …` are a stable contract between the two halves.
 
-`iosvnc devices`, `iosvnc probe` and `iosvnc doctor` predate the bridge: they use
-go-ios and the DVT screenshot service, which the bridge no longer relies on. They
-are still useful for answering "is the device reachable at all", but they are
-the legacy path in this tree.
-
-## Tests
+## Development
 
 ```bash
-go test ./...        # RFB wire format, session supervision, input mapping, doctor
+make test    # go test ./... + swift build
+make run     # run the app from the checkout (engine in build/, bridge in bridge/)
+make app     # build "iOS VNC Bridge.app" (ad-hoc signed) into build/
+make dmg     # + a DMG
 ```
 
-The device transport itself needs hardware; `bridge/iosbridge.py` is exercised by
-running the bridge and watching the frames it emits.
+Signing for distribution:
+
+```bash
+CODESIGN_ID="Developer ID Application: …" DMG=1 NOTARIZE=1 \
+  NOTARY_PROFILE=ac-notary make app
+```
+
+Layout: `app/` (SwiftUI), `cmd/engine` + `internal/` (Go), `bridge/`
+(Python device bridge), `packaging/` (Info.plist), `docs/`.
+
+## License
+
+MIT — see [LICENSE](LICENSE). At runtime the app installs
+[pymobiledevice3](https://github.com/doronz88/pymobiledevice3) (GPL-3.0-or-later)
+on the user's machine; it is not part of the distributed bundle. See
+[NOTICE](NOTICE).

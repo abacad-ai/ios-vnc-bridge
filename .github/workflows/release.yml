@@ -1,0 +1,32 @@
+name: release
+
+# Tag v0.1.0 → a DMG attached to the GitHub release.
+#
+# The build is ad-hoc signed: it runs locally, but macOS asks for a right-click →
+# Open the first time. To ship a notarized build, add a Developer ID certificate
+# and the notarytool profile as secrets and wire them into build-app.sh.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build app and DMG
+        run: VERSION="${GITHUB_REF_NAME#v}" DMG=1 ./scripts/build-app.sh
+      - name: Attach the DMG to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.dmg
+          generate_release_notes: true
+          draft: false
