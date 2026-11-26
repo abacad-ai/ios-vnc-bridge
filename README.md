@@ -53,10 +53,8 @@ but it speaks plain RFB, so any VNC client can connect to it directly.
    **Host** the Mac's LAN address, **Port** `5970`, **Sign-in → VNC password**,
    **Platform** iOS/iPadOS, **Mode** Gateway.
 
-The password is generated on first launch, stored in a `0600` file under
-`~/Library/Application Support/ios-vnc-bridge`, and required by the engine —
-there is no unauthenticated mode. It reaches the engine over a pipe, so it does
-not show up in `ps`.
+The password is generated on first launch and always required; see
+[Security](#security).
 
 ## Limits, honestly
 
@@ -113,6 +111,21 @@ CODESIGN_ID="Developer ID Application: …" DMG=1 NOTARIZE=1 \
 
 Layout: `app/` (SwiftUI), `cmd/engine` + `internal/` (Go), `bridge/`
 (Python device bridge), `packaging/` (Info.plist), `docs/`.
+
+## Security
+
+- The VNC password is generated on first launch and required by the engine;
+  there is no unauthenticated mode.
+- It lives in a `0600` file under `~/Library/Application Support/ios-vnc-bridge`,
+  **not the keychain**: every ad-hoc-signed rebuild changes the app's code
+  identity, and a keychain ACL then blocks `SecItemCopyMatching` behind a
+  password prompt the app cannot show before its UI exists.
+- It reaches the engine over a pipe, never argv, so `ps` does not show it.
+- The engine binds `0.0.0.0:5970` so a hub on another machine can reach it;
+  turn **Anyone on the LAN** off to keep it on loopback.
+- Developer Mode makes the Mac a privileged host: whoever reaches the port can
+  drive the device. Keep it on a trusted network and scope TCP 5970 to the
+  hub's address in the firewall.
 
 ## License
 
