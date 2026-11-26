@@ -31,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"iosvnc/internal/rfbserver"
+	"github.com/abacad-ai/ios-vnc-bridge/internal/rfbserver"
 )
 
 // Config describes how to launch and supervise the bridge process.

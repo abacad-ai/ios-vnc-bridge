@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"iosvnc/internal/rfbserver"
+	"github.com/abacad-ai/ios-vnc-bridge/internal/rfbserver"
 )
 
 // nopWriteCloser stands in for a bridge's stdin.
